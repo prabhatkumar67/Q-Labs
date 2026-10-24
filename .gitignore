@@ -1,0 +1,14 @@
+node_modules/
+.next/
+.next-local/
+.next-build/
+test-results/
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+*.db
+data/
+.DS_Store
+*.tar
