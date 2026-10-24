@@ -58,7 +58,10 @@ function ResultRow({ result, selected, onSelect }: { result: Result; selected: b
           )}
           {result.reason && <span className="qs-result-reason">{result.reason}</span>}
         </span>
-        <span className="qs-result-state">{result.status}</span>
+        <span className="qs-result-state">
+          {result.status}
+          {result.ms !== undefined && <small>{result.ms < 1000 ? `${result.ms} ms` : `${(result.ms / 1000).toFixed(1)} s`}</small>}
+        </span>
       </button>
     </li>
   );

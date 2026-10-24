@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.acceptance_api import router
 from app import acceptance_store as store
+from app.test_plan import TestPlan
 
 
 PLAN = {"name": "Checkout email", "steps": [
@@ -100,6 +101,44 @@ class AcceptanceApiTests(unittest.TestCase):
         with patch.dict(os.environ, {"GROQ_API_KEY": "test"}), patch("app.planner.llm.complete", return_value=reply):
             response = self.client.post("/api/acceptance/draft", json={"instruction": "just click place order"})
         self.assertEqual(response.status_code, 422)
+
+    def test_brief_needs_results_and_only_reports_open_failures(self):
+        from app import acceptance_insights
+        app = FastAPI()
+        app.include_router(acceptance_insights.router)
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        self.assertEqual(client.post("/api/acceptance/brief").status_code, 422)
+
+        saved = store.save_plan(TestPlan.model_validate(PLAN))
+        broken = "http://127.0.0.1:8120/broken"
+        failure = [{"index": 0, "action": "click", "status": "passed"},
+                   {"index": 1, "action": "assert_text", "status": "failed", "expected": "Email is required", "actual": ["Order confirmed"]}]
+        for status, results in (("failed", failure), ("passed", [])):  # failed first, then fixed
+            run = store.create_run(saved["id"], broken)
+            store.claim(run["id"])
+            store.finish(run["id"], status, results)
+        facts = acceptance_insights.brief_facts()
+        self.assertEqual(facts["open_failures"], [])
+        self.assertEqual(facts["failed_before_but_now_passing"], [{"test": "Checkout email", "app": "Demo store, broken build"}])
+
+        reply = '{"headline": "Everything passes — nice.", "findings": [{"severity": "good", "title": "Fixed", "detail": "x"}], "suggestions": ["Try it."]}'
+        with patch.dict(os.environ, {"GROQ_API_KEY": "test"}), patch("app.acceptance_insights.llm.complete", return_value=reply) as ask:
+            brief = client.post("/api/acceptance/brief").json()
+            client.post("/api/acceptance/brief")  # same data, served from the cache
+        self.assertEqual(ask.call_count, 1)
+        self.assertNotIn("—", brief["headline"])
+        self.assertEqual(brief["findings"][0]["severity"], "good")
+
+    def test_suite_needs_a_known_app_and_saved_tests(self):
+        from app import acceptance_insights
+        app = FastAPI()
+        app.include_router(acceptance_insights.router)
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        self.assertEqual(client.post("/api/acceptance/suites", json={"target_id": "nope"}).status_code, 404)
+        self.assertEqual(client.post("/api/acceptance/suites", json={"target_id": "sample-fixed"}).status_code, 422)
+        self.assertEqual(client.get("/api/acceptance/suites/missing").status_code, 404)
 
     def test_cancellation_keeps_completed_results_and_prevents_late_pass(self):
         saved = self.client.post("/api/acceptance/plans", json=PLAN).json()

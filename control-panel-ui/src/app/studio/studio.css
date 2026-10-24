@@ -143,7 +143,7 @@
 /* Run bar */
 .qs-runbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px auto;
+  grid-template-columns: minmax(0, 1fr) 300px auto auto;
   align-items: end;
   gap: 12px;
   padding: 14px 16px;
@@ -533,6 +533,37 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .qs *, .qs *::after, .qs *::before { animation: none !important; transition: none !important; }
+}
+
+.qs-voice-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.qs-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.qs-runbar .qs-toggle {
+  height: 34px;
+}
+.qs .qs-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--foreground);
+  cursor: pointer;
+}
+.qs-result-state small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  text-align: right;
+  text-transform: none;
 }
 
 /* Targets and adding an app */

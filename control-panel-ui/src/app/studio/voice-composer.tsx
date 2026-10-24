@@ -24,11 +24,13 @@ type Props = {
   pageMap: { data: PageMap | null; loading: boolean; error: string };
   onRefreshMap: () => void;
   examples: string[];
+  speak: boolean;
+  onSpeak: (value: boolean) => void;
 };
 
 const BARS = [0.45, 0.8, 1, 0.7, 0.4];
 
-export function VoiceComposer({ text, onText, onSubmit, working, hasSteps, mic, onToggleMic, log, pageMap, onRefreshMap, examples }: Props) {
+export function VoiceComposer({ text, onText, onSubmit, working, hasSteps, mic, onToggleMic, log, pageMap, onRefreshMap, examples, speak, onSpeak }: Props) {
   const [mapOpen, setMapOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const lastReply = log.at(-1)?.reply;
@@ -59,7 +61,13 @@ export function VoiceComposer({ text, onText, onSubmit, working, hasSteps, mic, 
     <section className="qs-panel qs-voice" aria-labelledby="voice-heading">
       <header className="qs-panel-head">
         <h2 id="voice-heading">Describe the test</h2>
-        <span className={`qs-mic-state ${mic.listening ? "is-on" : ""}`}>{micState}</span>
+        <div className="qs-voice-head">
+          <label className="qs-toggle" title="Speak the outcome when a run finishes">
+            <input type="checkbox" checked={speak} onChange={event => onSpeak(event.target.checked)} />
+            <span>Read results aloud</span>
+          </label>
+          <span className={`qs-mic-state ${mic.listening ? "is-on" : ""}`}>{micState}</span>
+        </div>
       </header>
 
       <div className="qs-voice-body">
@@ -123,7 +131,7 @@ export function VoiceComposer({ text, onText, onSubmit, working, hasSteps, mic, 
               {working ? <Loader2 size={16} className="animate-spin" /> : <ArrowUp size={16} />}
             </button>
           </div>
-          <p className="qs-compose-hint">Works with Wispr Flow. Commands: run it, run it on the fixed build, undo, start over, export.</p>
+          <p className="qs-compose-hint">Works with Wispr Flow. Commands: run it, run it on the fixed build, watch it run, undo, start over, export.</p>
         </div>
 
         <div className="qs-log" aria-label="Conversation" ref={logRef}>

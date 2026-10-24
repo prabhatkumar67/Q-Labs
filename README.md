@@ -25,10 +25,13 @@ The studio opens at `http://localhost:3000`.
 - **Draft against the actual page.** Q Labs inspects buttons, fields, links and message areas in Chromium to help ground the proposed test. Review selectors and any flagged steps before running.
 - **Built for speech.** "Email is required" gets its capital back, "save ten" becomes `SAVE10` when a field suggests it, and "twenty one dollars sixty" becomes `$21.60`.
 - **Edit by talking.** "Also check the total drops to $21.60" adds steps to the current test, and the changed steps are highlighted.
-- **Hands free commands.** "Run it", "run it on the fixed build", "undo", "start over" and "export" run straight away.
+- **Hands free commands.** "Run it", "run it on the fixed build", "watch it run", "undo", "start over" and "export" run straight away.
+- **Watch it work.** Turn on Show browser (or say "watch it run") and the test plays out in a visible Chromium window at human speed, with each element outlined as it is used.
+- **Hear the result.** With Read results aloud on, Q Labs says what happened, such as "Failed at step 2. Expected Email is required, but the page showed Order confirmed." The mic ignores that speech so it is not taken as a new request.
 - **Evidence, not a green tick.** Every check shows expected and actual values, later steps are blocked after a failure, and a browser error is reported separately from a failed check.
 - **Your own local apps.** Register an app running on localhost as a target and review its proposed test steps.
 - **Playwright export.** Download the saved test as a `.spec.ts` file for your Playwright project. Configure its target and dependencies before running it independently.
+- **A dashboard that explains itself.** Pass rate, runs, open failures and run time for any range, an interactive runs chart, every open failure with expected and actual side by side and its screenshot, one click "run all tests" per app, and an AI brief from Groq that names what is broken and suggests the next tests to say out loud. A fresh install offers to load demo data, which runs real tests rather than inventing numbers.
 
 The language model is Groq (`openai/gpt-oss-120b` by default). The same key also powers the sandbox platform's AI agent.
 
@@ -36,12 +39,22 @@ The language model is Groq (`openai/gpt-oss-120b` by default). The same key also
 
 You need Node.js 22 and Python 3.13. Docker is only needed for the sandbox platform.
 
+On Windows, one command sets everything up on the first run, starts the API, demo store and UI, and opens the studio:
+
+```powershell
+git clone https://github.com/prabhatkumar67/Q-Labs.git
+cd Q-Labs
+./dev.ps1          # ./dev.ps1 -Stop shuts the servers down
+```
+
+Or step by step:
+
 ```powershell
 # From the project root
 cd control-panel-api
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt playwright
-.\.venv\Scripts\python.exe -m playwright install chromium --only-shell
+.\.venv\Scripts\python.exe -m playwright install chromium
 copy .env.example .env
 ```
 
@@ -86,6 +99,10 @@ The demo store at port 8120 is a small coffee shop checkout with a broken and a 
 4. Say: "Also apply the code save ten and check the total drops to twenty one dollars sixty."
 5. Say: "Run it on the fixed build." Both checks pass with the same saved test.
 6. Say: "Export." The Playwright file downloads.
+
+### On a real app
+
+Q Labs is not tied to the demo store. With `QLABS_ALLOW_REMOTE_TARGETS=1`, add a deployed app with the plus button next to Target. Against [SaySketch](https://saysketch.vercel.app), saying "click start drawing and it should take me to the editor page" produced a two step test from the real page links, which passed with the browser ending on `/d/new`.
 
 More detail, including limits, is in [TEST-STUDIO.md](TEST-STUDIO.md).
 
@@ -150,6 +167,9 @@ control-panel-ui/src/app/studio/
 | `GET` | `/api/acceptance/plans/{id}/export` | Playwright source for a saved test |
 | `GET`, `POST` | `/api/acceptance/runs` | List runs or start one |
 | `GET` | `/api/voice/status`, `/api/voice/token` | Mic availability and a short lived Deepgram key |
+| `POST` | `/api/acceptance/brief` | AI brief written by Groq from real results |
+| `POST` | `/api/acceptance/suites`, `/api/acceptance/demo` | Run every saved test on one app, or load demo data |
+| `GET` | `/api/acceptance/suites/{id}` | Progress of a suite |
 | `GET`, `POST` | `/api/apps`, `/api/scenarios`, `/api/sandboxes` | Sandbox platform |
 | `POST` | `/api/apps/{version_id}/qa-run` | Start an Auto QA run |
 | `POST` | `/api/agent/next-action` | AI agent's next action from the DOM and intent |

@@ -159,12 +159,14 @@ def voice_token():
 class RunRequest(BaseModel):
     plan_id: str = Field(min_length=1, max_length=64)
     target_id: str = Field(min_length=1, max_length=64)
+    watch: bool = False
 
 
-def supervise(run_id):
+def supervise(run_id, watch=False):
     try:
-        subprocess.run([sys.executable, "-m", "app.acceptance_worker", run_id], cwd=str(API_DIR), timeout=120,
-                       check=True, creationflags=NO_WINDOW, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        command = [sys.executable, "-m", "app.acceptance_worker", run_id] + (["--watch"] if watch else [])
+        subprocess.run(command, cwd=str(API_DIR), timeout=120, check=True, creationflags=NO_WINDOW,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         run = store.get_run(run_id)
         if run and run["status"] in {"queued", "running"}:
             store.finish(run_id, "errored", run["results"], "The worker exited before completing the required checks.")
@@ -184,7 +186,7 @@ def start_run(body: RunRequest):
         run = store.create_run(body.plan_id, target["url"])
     except ValueError as exc:
         raise HTTPException(429, str(exc)) from exc
-    executor.submit(supervise, run["id"])
+    executor.submit(supervise, run["id"], body.watch)
     return run
 
 

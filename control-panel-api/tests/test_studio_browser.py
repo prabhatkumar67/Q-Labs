@@ -71,6 +71,19 @@ class StudioBrowserTests(unittest.TestCase):
         expect(page.locator(".qs-log").get_by_text("Undid the last change.")).to_be_visible()
         expect(page.get_by_text("0 steps, 0 assertions", exact=True)).to_be_visible()
 
+    def test_watch_command_runs_in_a_visible_browser(self):
+        from playwright.sync_api import expect
+        page = self.open(viewport={"width": 1440, "height": 1080})
+        page.get_by_role("button", name="Load sample").click()
+        box = page.get_by_label("What should the test do")
+        box.fill("Watch it run on the fixed build")
+        with page.expect_request(lambda request: request.url.endswith("/api/acceptance/runs") and request.method == "POST") as started:
+            box.press("Control+Enter")
+        self.assertEqual(started.value.post_data_json["watch"], True)
+        self.assertEqual(started.value.post_data_json["target_id"], "sample-fixed")
+        expect(page.locator(".qs-log").get_by_text("Passed. The check matched.")).to_be_visible(timeout=60000)
+        expect(page.locator(".qs-result-state small").first).to_be_visible()
+
     def test_mobile_alignment_and_existing_dashboard_navigation(self):
         from playwright.sync_api import expect
         page = self.open(viewport={"width": 390, "height": 844}, is_mobile=True, device_scale_factor=1)

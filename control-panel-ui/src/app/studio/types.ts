@@ -20,6 +20,7 @@ export type Result = {
   actual?: unknown;
   reason?: string;
   screenshot?: string;
+  ms?: number;
 };
 
 export type Run = {

@@ -25,6 +25,7 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const buffer = useRef("");
   const keyterms = useRef<string[]>([]);
+  const mutedUntil = useRef(0);
   const onRequestRef = useRef(onRequest);
   const onErrorRef = useRef(onError);
   onRequestRef.current = onRequest;
@@ -112,6 +113,13 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
       ws.onmessage = event => {
         if (id !== session.current) return;
         const data = JSON.parse(event.data);
+        // While Q Labs is speaking, the mic hears it too. Drop that audio instead of treating it as a request.
+        if (Date.now() < mutedUntil.current) {
+          buffer.current = "";
+          setHeard("");
+          setInterim("");
+          return;
+        }
         if (data.type === "UtteranceEnd") {
           if (/[.?!]["']?$/.test(buffer.current.trim())) flush();
           else if (buffer.current.trim()) {
@@ -169,10 +177,18 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
     keyterms.current = terms;
   }, []);
 
+  /** Ignore what the mic hears for the next `ms` milliseconds. */
+  const mute = useCallback((ms: number) => {
+    mutedUntil.current = Math.max(mutedUntil.current, Date.now() + ms);
+    if (settle.current) clearTimeout(settle.current);
+    buffer.current = "";
+    setHeard("");
+  }, []);
+
   useEffect(() => () => {
     session.current++;
     teardown();
   }, [teardown]);
 
-  return { listening, connecting, heard, interim, level, start, stop, setKeyterms };
+  return { listening, connecting, heard, interim, level, start, stop, setKeyterms, mute };
 }

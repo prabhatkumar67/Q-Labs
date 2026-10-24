@@ -18,7 +18,7 @@ FastAPI backend for Q Labs. It serves the voice test studio (targets, page maps,
 cd control-panel-api
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-sqlite.txt
-.\.venv\Scripts\python.exe -m playwright install chromium --only-shell
+.\.venv\Scripts\python.exe -m playwright install chromium
 copy .env.example .env
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```

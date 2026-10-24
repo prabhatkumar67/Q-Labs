@@ -6,12 +6,14 @@ The studio is at `/` and `/studio`. The inherited sandbox dashboard stays at `/d
 
 ## Start locally
 
-Use Node.js 22 and Python 3.13. From `control-panel-api`:
+Use Node.js 22 and Python 3.13. On Windows, `./dev.ps1` in the repository root does all of the steps below and opens the studio. `./dev.ps1 -Stop` stops the servers.
+
+To do it by hand, from `control-panel-api`:
 
 ```powershell
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-sqlite.txt
-.\.venv\Scripts\python.exe -m playwright install chromium --only-shell
+.\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -52,22 +54,35 @@ Without Deepgram keys the mic button is off, and Wispr Flow is the voice input: 
 5. Short commands are handled directly, without the model:
    - "run it", "run it again"
    - "run it on the fixed build", "use the broken build", or the name of an app you added
+   - "watch it run", "run it and show me" (opens a visible browser for that run)
    - "undo", "start over", "export"
 
 Speech recognition gets the page's own labels as key terms, so words like "Place order" or "SAVE10" are heard correctly.
 
+## Watching and hearing a run
+
+- **Show browser** in the run bar (or "watch it run") opens Chromium in a window and slows every action to about a second, so a viewer can follow along. Each element is outlined as it is used: blue for actions, green for a passing check, red for a failing one. The same outlines appear in the screenshots.
+- **Read results aloud** speaks the outcome when a run finishes, naming the failing step with the expected and actual values. The mic discards what it hears while Q Labs is speaking.
+- Each step records how long it took. Checks wait up to 3 seconds for the page to settle and actions up to 5.
+
 ## Test your own app
 
-Click the plus button next to Target, give the app a name and a local address such as `http://localhost:3001`. Only localhost addresses are accepted unless `QLABS_ALLOW_REMOTE_TARGETS=1` is set. During a run the browser only loads requests from that address.
+Click the plus button next to Target, give the app a name and an address such as `http://localhost:3001`. Only localhost addresses are accepted unless `QLABS_ALLOW_REMOTE_TARGETS=1` is set in `control-panel-api/.env`. During a run the browser only loads requests from that address, so third party scripts on the page are blocked.
 
-## Demo script (about 90 seconds)
+## Demo script (about two minutes)
 
-1. Start with the empty studio on **Demo store, broken build**. Point at "Grounded in Checkout, 11 elements".
+Start everything with `./dev.ps1`, turn on **Show browser** and **Read results aloud**, and begin with an empty studio on **Demo store, broken build**.
+
+1. Point at "Grounded in Checkout | Fernhill Coffee, 11 elements" and open it to show the real selectors.
 2. Mic on: "Leave the email empty and press place order. It should say email is required."
-3. "Run it." The check fails: expected `Email is required`, actual `Order confirmed`, with a screenshot.
-4. "Also apply the code save ten and check the total drops to twenty one dollars sixty."
-5. "Run it on the fixed build." Both checks pass with the same saved test.
+3. "Run it." Chromium opens and clicks through. The check fails and Q Labs says: expected `Email is required`, the page showed `Order confirmed`.
+4. "Also apply the code save ten and check the total drops to twenty one dollars sixty." The new steps flash.
+5. "Run it on the fixed build." Same saved test, both checks pass.
 6. "Export." The Playwright file downloads and runs in any Playwright project with `BASE_URL` set.
+7. Real app: add SaySketch (`https://saysketch.vercel.app`), then say "Click start drawing and it should take me to the editor page", then "run it". It passes, with the browser ending on `/d/new`.
+8. Open **Dashboard**. Point at the open failures with expected and actual side by side, expand one to show its screenshot, and read the AI brief. Click a suggested test to open it in the studio, or press **Run all tests** on an app and watch the progress bar.
+
+On an empty install the dashboard offers **Load demo data**. It saves four demo tests and runs each on both builds, about 20 seconds in total, so the numbers on screen come from real runs.
 
 The broken build has two bugs on purpose: it confirms orders without an email, and it shows "SAVE10 applied" without lowering the total.
 

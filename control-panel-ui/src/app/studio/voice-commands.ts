@@ -1,7 +1,7 @@
 import type { Target } from "./types";
 
 export type Command =
-  | { type: "run"; targetId?: string }
+  | { type: "run"; targetId?: string; watch?: boolean }
   | { type: "target"; targetId: string }
   | { type: "undo" }
   | { type: "reset" }
@@ -27,11 +27,19 @@ export function matchTarget(phrase: string, targets: Target[]): string | undefin
  * Kept strict on purpose, so "run the checkout and check the total" still drafts steps.
  */
 export function parseCommand(text: string, targets: Target[]): Command | null {
-  const said = words(text).replace(/^(ok|okay|now|so|and|alright|great|cool)\s+/, "").replace(/\s+(please|now)$/, "");
-  if (said.split(" ").length > 9) return null;
+  let said = words(text).replace(/^(ok|okay|now|so|and|alright|great|cool)\s+/, "").replace(/\s+(please|now)$/, "");
+  if (said.split(" ").length > 11) return null;
+
+  // "watch it run", "run it and show me", "run it on the fixed build so I can watch"
+  const watch = /\b(watch|show me|let me see|visible)\b/.test(said);
+  said = said
+    .replace(/^(?:let me )?watch(?: it)?(?: run)?\b/, "run")
+    .replace(/\s*(?:and|so i can|while i)?\s*(?:show me|watch(?: it)?|let me see(?: it)?)$/, "")
+    .replace(/\s+(?:in a |with a )?visible(?: browser)?$/, "")
+    .trim();
 
   const run = said.match(/^(?:re ?run|run|test|try)(?: it| this| that| the test| again| it again)*(?: (?:on|against|with|in|using) (.+))?$/);
-  if (run) return { type: "run", targetId: run[1] ? matchTarget(run[1], targets) : undefined };
+  if (run) return { type: "run", targetId: run[1] ? matchTarget(run[1], targets) : undefined, watch };
 
   const target = said.match(/^(?:switch|change|use|go|point it)(?: (?:to|over to|the))* (.+)$/);
   if (target) {

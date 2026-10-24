@@ -10,7 +10,7 @@ import { useLiveMic } from "./use-live-mic";
 import { VoiceComposer, type LogEntry } from "./voice-composer";
 import { parseCommand, type Command } from "./voice-commands";
 import {
-  download, EMPTY_PLAN, EXAMPLES, isActive, isAssertion, pageKeyterms, SAMPLE,
+  download, EMPTY_PLAN, EXAMPLES, formatActual, isActive, isAssertion, pageKeyterms, SAMPLE,
   type Draft, type PageMap, type Plan, type Run, type SavedPlan, type Target,
 } from "./types";
 import "./studio.css";
@@ -23,6 +23,22 @@ const FALLBACK_TARGETS: Target[] = [
 function changedSteps(before: Plan, after: Plan) {
   const old = new Set(before.steps.map(step => JSON.stringify(step)));
   return new Set(after.steps.flatMap((step, i) => (old.has(JSON.stringify(step)) ? [] : [i])));
+}
+
+type Prefs = { watch: boolean; speak: boolean };
+
+/** A sentence that makes sense heard, not read: it names the failing step and both values. */
+function spokenResult(run: Run) {
+  const checks = run.results.filter(r => r.action.startsWith("assert_"));
+  if (run.status === "passed") return checks.length === 1 ? "Passed. The check matched." : `Passed. All ${checks.length} checks matched.`;
+  const failed = run.results.find(r => r.status === "failed");
+  if (run.status === "failed" && failed) {
+    const actual = formatActual(failed.actual);
+    return `Failed at step ${failed.index + 1}. Expected ${failed.expected}, but the page showed ${actual === "Not observed" ? "nothing" : actual}.`;
+  }
+  const broken = run.results.find(r => r.status === "errored");
+  if (broken) return `Could not finish step ${broken.index + 1}. ${broken.reason ?? ""}`;
+  return runSummary(run);
 }
 
 function runSummary(run: Run) {
@@ -54,6 +70,19 @@ export default function TestStudio() {
   const [unmapped, setUnmapped] = useState<number[]>([]);
   const [pageMap, setPageMap] = useState<{ data: PageMap | null; loading: boolean; error: string }>({ data: null, loading: false, error: "" });
   const [micAvailable, setMicAvailable] = useState(false);
+  const [prefs, setPrefs] = useState<Prefs>({ watch: false, speak: false });
+  const prefsRef = useRef(prefs);
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("qlabs-studio-prefs") || "{}");
+      const next = { watch: stored.watch === true, speak: stored.speak === true };
+      prefsRef.current = next;
+      setPrefs(next);
+    } catch {
+      // Storage can be unavailable; defaults stay in place.
+    }
+  }, []);
   const [appForm, setAppForm] = useState<{ open: boolean; name: string; url: string; error: string }>({ open: false, name: "", url: "", error: "" });
 
   // Voice requests arrive from callbacks, so the latest state is read through refs.
@@ -100,13 +129,36 @@ export default function TestStudio() {
     setPlans(saved);
     setRuns(history);
     setTargets(available);
+    return { saved: saved as SavedPlan[], available: available as Target[] };
   }, []);
 
   const mic = useLiveMic(
     said => enqueue(said, "mic"),
     message => setError(message),
   );
-  const { setKeyterms } = mic;
+  const { setKeyterms, mute } = mic;
+
+  // Reads a result aloud. The mic is muted for roughly as long as the speech lasts, so it does not hear itself.
+  function say(text: string) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.05;
+    mute(text.length * 75 + 1500);
+    utterance.onend = () => mute(700);
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function setPref(key: keyof Prefs, value: boolean) {
+    const next = { ...prefsRef.current, [key]: value };
+    prefsRef.current = next;
+    setPrefs(next);
+    try {
+      localStorage.setItem("qlabs-studio-prefs", JSON.stringify(next));
+    } catch {
+      // Private windows can block storage; the toggle still works for this visit.
+    }
+  }
 
   const loadMap = useCallback(async (id: string, refreshMap = false) => {
     setPageMap(current => ({ ...current, loading: true, error: "" }));
@@ -122,9 +174,20 @@ export default function TestStudio() {
   }, [setKeyterms]);
 
   useEffect(() => {
-    refresh().catch(() => setError("Can't reach the Q Labs API on port 8000. Start it, then reload this page."));
+    refresh()
+      .then(({ saved, available }) => {
+        // Links from the dashboard: ?plan= opens a saved test, ?target= picks the app, ?say= fills the box.
+        const params = new URLSearchParams(window.location.search);
+        const target = params.get("target");
+        if (target && available.some(t => t.id === target)) setTargetId(target);
+        const linked = saved.find(p => p.id === params.get("plan"));
+        if (linked) openSaved(linked);
+        const said = params.get("say");
+        if (said) setText(said.slice(0, 6000));
+      })
+      .catch(() => setError("Can't reach the Q Labs API on port 8000. Start it, then reload this page."));
     api("/api/voice/status").then(status => setMicAvailable(!!status.live_mic)).catch(() => {});
-  }, [refresh]);
+  }, [refresh]); // eslint-disable-line react-hooks/exhaustive-deps -- links are applied once, on load
 
   useEffect(() => {
     loadMap(targetId);
@@ -144,6 +207,7 @@ export default function TestStudio() {
             updateLog(runLogEntry.current, { reply: runSummary(next), tone: next.status === "passed" ? "done" : "error" });
             runLogEntry.current = null;
           }
+          if (prefsRef.current.speak) say(spokenResult(next));
           refresh().catch(() => {});
         })
         .catch(() => alive && setError("Lost contact with this run. Open it from History once the API is back."));
@@ -184,11 +248,11 @@ export default function TestStudio() {
     return saved;
   }
 
-  async function launch(target: string) {
+  async function launch(target: string, watch = prefsRef.current.watch) {
     const saved = await save();
     const next: Run = await api("/api/acceptance/runs", {
       method: "POST",
-      body: JSON.stringify({ plan_id: saved.id, target_id: target }),
+      body: JSON.stringify({ plan_id: saved.id, target_id: target, watch }),
     });
     setRun(next);
     setSelectedStep(null);
@@ -259,7 +323,7 @@ export default function TestStudio() {
     const target = cmd.targetId ?? targetRef.current;
     if (target !== targetRef.current) setTargetId(target);
     try {
-      await launch(target);
+      await launch(target, cmd.watch || prefsRef.current.watch);
       runLogEntry.current = entry;
       reply(`Running on ${name(target)}.`, "pending");
     } catch (e) {
@@ -404,6 +468,10 @@ export default function TestStudio() {
             </button>
           </div>
         </div>
+        <label className="qs-toggle" title="Open a visible browser and slow each step down">
+          <input type="checkbox" checked={prefs.watch} onChange={event => setPref("watch", event.target.checked)} />
+          <span>Show browser</span>
+        </label>
         <button type="button" className="qs-button is-primary qs-run" disabled={!canRun} onClick={startRun}>
           {busy === "run" || running ? <Loader2 size={16} className="animate-spin" /> : <Play size={15} />}
           {running ? "Running" : "Run test"}
@@ -423,7 +491,7 @@ export default function TestStudio() {
             <input value={appForm.name} maxLength={60} placeholder="SaySketch" onChange={e => setAppForm({ ...appForm, name: e.target.value })} />
           </label>
           <label className="qs-field">
-            <span>Local URL</span>
+            <span>App URL</span>
             <input className="is-code" value={appForm.url} placeholder="http://localhost:3001" onChange={e => setAppForm({ ...appForm, url: e.target.value })} />
           </label>
           <button type="submit" className="qs-button" disabled={!appForm.name.trim() || !appForm.url.trim() || busy === "app"}>Add app</button>
@@ -466,6 +534,8 @@ export default function TestStudio() {
         pageMap={pageMap}
         onRefreshMap={() => loadMap(targetId, true)}
         examples={EXAMPLES}
+        speak={prefs.speak}
+        onSpeak={value => setPref("speak", value)}
       />
 
       <div className="qs-grid">

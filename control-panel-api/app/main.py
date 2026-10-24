@@ -31,7 +31,9 @@ from pydantic import BaseModel  # noqa: E402
 app = FastAPI(title="Sandbox Platform API")
 
 from app.acceptance_api import router as acceptance_router  # noqa: E402
+from app.acceptance_insights import router as insights_router  # noqa: E402
 app.include_router(acceptance_router)
+app.include_router(insights_router)
 
 app.add_middleware(
     CORSMiddleware,
