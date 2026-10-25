@@ -3,6 +3,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 export async function api(path: string, options?: RequestInit) {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
+    signal: options?.signal ?? AbortSignal.timeout(60000),
     headers: {
       "Content-Type": "application/json",
       ...options?.headers,

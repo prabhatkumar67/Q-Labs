@@ -5,6 +5,7 @@ seed creates real tests and runs them in the browser like any other run.
 """
 
 import json
+import hashlib
 import threading
 import time
 import uuid
@@ -51,7 +52,7 @@ def _targets():
 
 def _run_sequence(suite_id, jobs):
     """Runs (plan_id, target) pairs one at a time, so a suite never fills the shared queue."""
-    from app.acceptance_api import supervise
+    from app.acceptance_api import supervise, executor
     for plan_id, target in jobs:
         run = None
         for _ in range(240):  # wait up to two minutes for a free slot
@@ -61,26 +62,45 @@ def _run_sequence(suite_id, jobs):
             except ValueError:
                 time.sleep(0.5)
         if run is None:
+            with _lock:
+                _suites[suite_id]["done"] += 1
+                _suites[suite_id]["errored"] += 1
+                _suites[suite_id]["reason"] = "A job could not start because the execution queue remained full."
+                store.save_suite(_suites[suite_id])
             continue
         with _lock:
             _suites[suite_id]["run_ids"].append(run["id"])
-        supervise(run["id"])
+            store.save_suite(_suites[suite_id])
+        executor.submit(supervise, run["id"]).result()
         status = store.get_run(run["id"])["status"]
         with _lock:
             suite = _suites[suite_id]
             suite["done"] += 1
             suite[status if status in ("passed", "failed") else "errored"] += 1
+            store.save_suite(suite)
     with _lock:
         _suites[suite_id]["finished"] = True
+        store.save_suite(_suites[suite_id])
 
 
 def _start_suite(jobs, label):
     suite_id = uuid.uuid4().hex[:12]
     with _lock:
+        if any(not suite["finished"] for suite in _suites.values()):
+            raise HTTPException(409, "A suite is already running. Wait for it to finish before starting another.")
         _suites[suite_id] = {"id": suite_id, "label": label, "total": len(jobs), "done": 0, "passed": 0,
                              "failed": 0, "errored": 0, "finished": not jobs, "run_ids": []}
         snapshot = dict(_suites[suite_id])
-    threading.Thread(target=_run_sequence, args=(suite_id, jobs), daemon=True).start()
+        store.save_suite(snapshot)
+    def guarded_sequence():
+        try:
+            _run_sequence(suite_id, jobs)
+        except Exception:
+            with _lock:
+                suite = _suites[suite_id]
+                suite.update(finished=True, reason="Suite execution was interrupted. Inspect completed runs and retry.")
+                store.save_suite(suite)
+    threading.Thread(target=guarded_sequence, daemon=True).start()
     return snapshot
 
 
@@ -114,7 +134,7 @@ def run_suite(body: SuiteRequest):
 @router.get("/suites/{suite_id}")
 def get_suite(suite_id: str):
     with _lock:
-        suite = _suites.get(suite_id)
+        suite = _suites.get(suite_id) or store.get_suite(suite_id)
         if not suite:
             raise HTTPException(404, "Suite not found.")
         return dict(suite)
@@ -193,13 +213,13 @@ def brief_facts():
         plan = plans.get(run["plan_id"])
         if not plan:
             continue
-        key = (plan["name"], app_name)
+        key = (json.dumps(plan["body"], sort_keys=True), run["target"])
         if key not in latest:
             latest[key] = run["status"]
             if run["status"] in ("failed", "errored") and len(open_failures) < 12:
                 open_failures.extend(list(_failures(run, plan, app_name))[: 12 - len(open_failures)])
         elif latest[key] == "passed" and run["status"] in ("failed", "errored"):
-            entry = {"test": key[0], "app": app_name}
+            entry = {"test": plan["name"], "app": app_name}
             if entry not in resolved:
                 resolved.append(entry)
     tests = sorted({plan["name"] for plan in plans.values()})[:20]
@@ -216,12 +236,14 @@ def write_brief(refresh: bool = False):
     facts = brief_facts()
     if not facts["runs_considered"]:
         raise HTTPException(422, "Run a few tests first. The brief is written from real results.")
-    key = f"{store.list_runs()[0]['id']}:{facts['runs_considered']}"
+    key = hashlib.sha256(json.dumps(facts, sort_keys=True, default=str).encode()).hexdigest()
     if not refresh and key in _brief_cache:
         return _brief_cache[key]
     try:
         text = llm.complete(BRIEF_RULES, "Data:\n" + json.dumps(facts, default=str), max_tokens=1500)
         data = json.loads(text[text.find("{"): text.rfind("}") + 1])
+        if not isinstance(data, dict) or not isinstance(data.get("findings", []), list) or not isinstance(data.get("suggestions", []), list):
+            raise ValueError("Expected brief fields")
     except llm.LLMError as exc:
         raise HTTPException(exc.status, exc.message) from exc
     except (ValueError, TypeError) as exc:

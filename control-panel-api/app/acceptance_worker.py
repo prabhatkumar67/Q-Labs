@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 import sys
 import time
-from urllib.parse import urlsplit
 
 from app import acceptance_store as store
 from app.test_plan import TestPlan
+from app.target_urls import navigation_url, same_origin
 
 # Outline for the element a step used, so screenshots and watch mode show what was touched.
 MARK = """(el, color) => {
@@ -37,17 +37,17 @@ def mark(locator, color):
 def run_step(page, origin, step, result, expect):
     """Performs one step and fills in expected and actual values. Raises AssertionError on a mismatch."""
     if step.action == "navigate":
-        response = page.goto(origin + step.path, wait_until="domcontentloaded", timeout=15000)
+        response = page.goto(navigation_url(origin, step.path), wait_until="domcontentloaded", timeout=15000)
         if response is None or response.status >= 400:
             raise RuntimeError("The target page could not be loaded.")
         return
     if step.action == "assert_url":
-        result["expected"] = step.path
+        result["expected"] = navigation_url(origin, step.path)
         try:
-            expect(page).to_have_url(origin + step.path)
+            expect(page).to_have_url(result["expected"])
         finally:
             # Read after the wait, so a navigation that is still finishing is reported correctly.
-            result["actual"] = urlsplit(page.url).path
+            result["actual"] = page.url
         return
     locator = page.locator(step.selector)
     if step.action == "assert_text":
@@ -99,7 +99,7 @@ def execute(run_id, watch=False):
             context.set_default_timeout(5000)
             # Controlled app only. Deny browser subrequests to unrelated origins.
             context.route("**/*", lambda route: route.continue_() if (
-                route.request.url.startswith(origin + "/") or route.request.url == origin
+                same_origin(route.request.url, origin)
             ) else route.abort())
             page = context.new_page()
             status = "passed"

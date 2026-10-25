@@ -9,6 +9,7 @@ import { StepEditor } from "./step-editor";
 import { useLiveMic } from "./use-live-mic";
 import { VoiceComposer, type LogEntry } from "./voice-composer";
 import { parseCommand, type Command } from "./voice-commands";
+import { DRAFT_KEY, readDraft } from "./draft-storage";
 import {
   download, EMPTY_PLAN, EXAMPLES, formatActual, isActive, isAssertion, pageKeyterms, SAMPLE,
   type Draft, type PageMap, type Plan, type Run, type SavedPlan, type Target,
@@ -71,6 +72,7 @@ export default function TestStudio() {
   const [pageMap, setPageMap] = useState<{ data: PageMap | null; loading: boolean; error: string }>({ data: null, loading: false, error: "" });
   const [micAvailable, setMicAvailable] = useState(false);
   const [prefs, setPrefs] = useState<Prefs>({ watch: false, speak: false });
+  const [draftHydrated, setDraftHydrated] = useState(false);
   const prefsRef = useRef(prefs);
 
   useEffect(() => {
@@ -92,6 +94,9 @@ export default function TestStudio() {
   const queue = useRef<Promise<void>>(Promise.resolve());
   const logId = useRef(0);
   const runLogEntry = useRef<number | null>(null);
+  const activeRunRef = useRef<Run | null>(null);
+  const launchingRef = useRef(false);
+  const revision = useRef(0);
   planRef.current = plan;
   targetRef.current = targetId;
 
@@ -100,7 +105,7 @@ export default function TestStudio() {
   const currentTarget = shownTargets.find(t => t.id === targetId);
   const assertions = plan.steps.filter(isAssertion).length;
   const running = isActive(run);
-  const canRun = !busy && !running && assertions > 0 && plan.name.trim().length > 0;
+  const canRun = !busy && !drafting && !running && assertions > 0 && plan.name.trim().length > 0;
   // Every edit saves a new immutable record, so collapse identical bodies (the API lists newest first).
   const uniquePlans = plans.filter(
     (saved, i) => plans.findIndex(other => JSON.stringify(other.body) === JSON.stringify(saved.body)) === i,
@@ -114,7 +119,14 @@ export default function TestStudio() {
   const updateLog = (id: number, patch: Partial<LogEntry>) =>
     setLog(current => current.map(entry => (entry.id === id ? { ...entry, ...patch } : entry)));
 
+  function selectTarget(id: string) {
+    if (targetRef.current !== id) revision.current++;
+    targetRef.current = id;
+    setTargetId(id);
+  }
+
   function setPlan(next: Plan, options: { remember?: boolean } = {}) {
+    revision.current++;
     if (options.remember) undoRef.current = [...undoRef.current.slice(-19), planRef.current];
     planRef.current = next;
     setPlanState(next);
@@ -144,12 +156,14 @@ export default function TestStudio() {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.05;
-    mute(text.length * 75 + 1500);
+    mute(Infinity);
     utterance.onend = () => mute(700);
+    utterance.onerror = () => mute(0);
     window.speechSynthesis.speak(utterance);
   }
 
   function setPref(key: keyof Prefs, value: boolean) {
+    if (key === "speak" && !value) { window.speechSynthesis?.cancel(); mute(0); }
     const next = { ...prefsRef.current, [key]: value };
     prefsRef.current = next;
     setPrefs(next);
@@ -174,12 +188,32 @@ export default function TestStudio() {
   }, [setKeyterms]);
 
   useEffect(() => {
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      if (!window.location.search && revision.current === 0) {
+        const saved = readDraft(sessionStorage);
+        if (saved) { setPlan(saved.plan); selectTarget(saved.target); setText(saved.text); }
+      }
+      setDraftHydrated(true);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!draftHydrated) return;
+    try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ plan, target: targetId, text })); } catch { /* Storage is optional. */ }
+  }, [draftHydrated, plan, targetId, text]);
+
+  useEffect(() => {
+    const requestedRevision = revision.current;
     refresh()
       .then(({ saved, available }) => {
+        if (revision.current !== requestedRevision) return;
         // Links from the dashboard: ?plan= opens a saved test, ?target= picks the app, ?say= fills the box.
         const params = new URLSearchParams(window.location.search);
         const target = params.get("target");
-        if (target && available.some(t => t.id === target)) setTargetId(target);
+        if (target && available.some(t => t.id === target)) selectTarget(target);
         const linked = saved.find(p => p.id === params.get("plan"));
         if (linked) openSaved(linked);
         const said = params.get("say");
@@ -197,10 +231,14 @@ export default function TestStudio() {
   useEffect(() => {
     if (!run || !isActive(run)) return;
     let alive = true;
+    let pending = false;
     const timer = setInterval(() => {
+      if (pending) return;
+      pending = true;
       api(`/api/acceptance/runs/${run.id}`)
         .then((next: Run) => {
           if (!alive) return;
+          activeRunRef.current = next;
           setRun(next);
           if (isActive(next)) return;
           if (runLogEntry.current) {
@@ -210,7 +248,8 @@ export default function TestStudio() {
           if (prefsRef.current.speak) say(spokenResult(next));
           refresh().catch(() => {});
         })
-        .catch(() => alive && setError("Lost contact with this run. Open it from History once the API is back."));
+        .catch(() => alive && setError("Lost contact with this run. Open it from History once the API is back."))
+        .finally(() => { pending = false; });
     }, 900);
     return () => {
       alive = false;
@@ -249,15 +288,20 @@ export default function TestStudio() {
   }
 
   async function launch(target: string, watch = prefsRef.current.watch) {
-    const saved = await save();
-    const next: Run = await api("/api/acceptance/runs", {
-      method: "POST",
-      body: JSON.stringify({ plan_id: saved.id, target_id: target, watch }),
-    });
-    setRun(next);
-    setSelectedStep(null);
-    await refresh();
-    return next;
+    if (launchingRef.current || isActive(activeRunRef.current)) throw new Error("A test is already queued or running. Wait for it to finish or cancel it before starting another.");
+    launchingRef.current = true;
+    try {
+      const saved = await save();
+      const next: Run = await api("/api/acceptance/runs", {
+        method: "POST",
+        body: JSON.stringify({ plan_id: saved.id, target_id: target, watch }),
+      });
+      setRun(next);
+      activeRunRef.current = next;
+      setSelectedStep(null);
+      await refresh();
+      return next;
+    } finally { launchingRef.current = false; }
   }
 
   async function act(name: string, work: () => Promise<void>) {
@@ -274,12 +318,18 @@ export default function TestStudio() {
 
   async function draft(said: string, entry: number) {
     const before = planRef.current;
+    const beforeRevision = revision.current;
+    const target = targetRef.current;
     setDrafting(true);
     try {
       const result: Draft = await api("/api/acceptance/draft", {
         method: "POST",
-        body: JSON.stringify({ instruction: said, target_id: targetRef.current, current: before.steps.length ? before : null }),
+        body: JSON.stringify({ instruction: said, target_id: target, current: before.steps.length ? before : null }),
       });
+      if (revision.current !== beforeRevision || targetRef.current !== target) {
+        updateLog(entry, { reply: "Your test or target changed while this draft was loading. Your newer work was kept. Submit the instruction again to apply it.", tone: "error" });
+        return;
+      }
       setPlan(result.plan, { remember: true });
       setChanged(changedSteps(before, result.plan));
       setUnmapped(result.unmapped);
@@ -294,8 +344,10 @@ export default function TestStudio() {
   async function command(cmd: Command, entry: number) {
     const reply = (message: string, tone: LogEntry["tone"] = "command") => updateLog(entry, { reply: message, tone });
     const name = (id: string) => targetsRef.current.find(t => t.id === id)?.name ?? "that app";
+    if (cmd.type === "clarify") return reply(cmd.message, "error");
     if (cmd.type === "target") {
-      setTargetId(cmd.targetId);
+      targetRef.current = cmd.targetId;
+      selectTarget(cmd.targetId);
       return reply(`Switched to ${name(cmd.targetId)}.`);
     }
     if (cmd.type === "undo") {
@@ -321,7 +373,7 @@ export default function TestStudio() {
       return reply("Downloaded the Playwright test.");
     }
     const target = cmd.targetId ?? targetRef.current;
-    if (target !== targetRef.current) setTargetId(target);
+    if (target !== targetRef.current) { targetRef.current = target; selectTarget(target); }
     try {
       await launch(target, cmd.watch || prefsRef.current.watch);
       runLogEntry.current = entry;
@@ -357,7 +409,9 @@ export default function TestStudio() {
   const cancelRun = () =>
     act("cancel", async () => {
       if (!run) return;
-      setRun(await api(`/api/acceptance/runs/${run.id}/cancel`, { method: "POST" }));
+      const next: Run = await api(`/api/acceptance/runs/${run.id}/cancel`, { method: "POST" });
+      activeRunRef.current = next;
+      setRun(next);
       await refresh();
     });
 
@@ -369,7 +423,7 @@ export default function TestStudio() {
           body: JSON.stringify({ name: appForm.name, url: appForm.url }),
         });
         await refresh();
-        setTargetId(created.id);
+        selectTarget(created.id);
         setAppForm({ open: false, name: "", url: "", error: "" });
       } catch (e) {
         setAppForm(form => ({ ...form, error: e instanceof Error ? e.message : "Could not add that app." }));
@@ -379,7 +433,7 @@ export default function TestStudio() {
   const removeApp = () =>
     act("app", async () => {
       await api(`/api/acceptance/targets/${targetId}`, { method: "DELETE" });
-      setTargetId("sample-broken");
+      selectTarget("sample-broken");
       await refresh();
     });
 
@@ -392,7 +446,7 @@ export default function TestStudio() {
     setPlan(structuredClone(SAMPLE), { remember: true });
     setChanged(new Set());
     setUnmapped([]);
-    setTargetId("sample-broken");
+    selectTarget("sample-broken");
   }
 
   function openSaved(saved: SavedPlan) {
@@ -452,7 +506,7 @@ export default function TestStudio() {
         <div className="qs-field qs-target">
           <label htmlFor="target-select">Target</label>
           <div className="qs-target-row">
-            <select id="target-select" value={targetId} onChange={event => setTargetId(event.target.value)}>
+            <select id="target-select" value={targetId} onChange={event => selectTarget(event.target.value)}>
               {shownTargets.map(target => (
                 <option key={target.id} value={target.id}>{target.name}</option>
               ))}
@@ -577,6 +631,11 @@ export default function TestStudio() {
             targets={shownTargets}
             currentRunId={run?.id}
             onOpen={next => {
+              if (isActive(activeRunRef.current) && activeRunRef.current?.id !== next.id) {
+                setError("Finish or cancel the current run before opening another result.");
+                return;
+              }
+              activeRunRef.current = next;
               setRun(next);
               setSelectedStep(null);
             }}

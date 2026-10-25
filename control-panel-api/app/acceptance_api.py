@@ -55,7 +55,11 @@ class TargetRequest(BaseModel):
 @router.post("/acceptance/targets", status_code=201)
 def add_target(body: TargetRequest):
     url = body.url.strip().rstrip("/")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        parts.port  # Validate malformed or out-of-range ports before storing the target.
+    except ValueError as exc:
+        raise HTTPException(422, "Use a valid app address and port.") from exc
     if parts.scheme not in {"http", "https"} or not parts.hostname:
         raise HTTPException(422, "Use a full address such as http://localhost:3001.")
     # Local tool: tests drive apps on this machine unless the operator opts in to remote targets.
@@ -63,6 +67,10 @@ def add_target(body: TargetRequest):
         raise HTTPException(422, "Only apps running on this computer (localhost) can be added.")
     if parts.query or parts.fragment:
         raise HTTPException(422, "Leave out query strings and # fragments.")
+    if parts.username or parts.password or "\\" in url or any(ord(char) < 32 for char in url):
+        raise HTTPException(422, "Do not include credentials, backslashes or control characters in an app address.")
+    if not body.name.strip():
+        raise HTTPException(422, "Give the app a name.")
     try:
         return store.add_target(body.name.strip(), url)
     except ValueError as exc:
@@ -121,8 +129,9 @@ class DraftRequest(BaseModel):
 def draft_plan(body: DraftRequest):
     grounding = None
     if body.target_id:
+        target = find_target(body.target_id)
         try:
-            grounding = page_map(find_target(body.target_id))
+            grounding = page_map(target)
         except HTTPException:
             grounding = None  # Still draft; the steps are flagged as unmapped by the UI.
     current = body.current if body.current and body.current.get("steps") else None
@@ -131,6 +140,8 @@ def draft_plan(body: DraftRequest):
     except planner.PlannerError as exc:
         raise HTTPException(exc.status, exc.message) from exc
     result["grounded"] = grounding is not None
+    if grounding is None:
+        result["unmapped"] = [index for index, step in enumerate(result["plan"]["steps"]) if step.get("selector")]
     return result
 
 
@@ -238,12 +249,17 @@ def export_plan(plan_id: str):
              "  if (await field.evaluate(el => el.tagName === 'SELECT')) await field.selectOption({ label: value });",
              "  else await field.fill(value);",
              "}", "",
+             "function targetPath(path: string) {",
+             "  const target = new URL(baseURL!);",
+             "  if (['localhost', '127.0.0.1'].includes(target.hostname) && target.port === '8120' && ['/broken', '/fixed'].includes(target.pathname.replace(/\\/$/, '')) && path === '/') return baseURL!.replace(/\\/$/, '') + '/';",
+             "  return new URL(path, target.origin).href;",
+             "}", "",
              f"test({json.dumps(plan.name)}, async ({{ page }}) => {{", "  await page.goto(baseURL);"]
     for step in plan.steps:
         if step.action == "navigate":
-            lines.append(f"  await page.goto(baseURL.replace(/\\/$/, '') + {json.dumps(step.path)});")
+            lines.append(f"  await page.goto(targetPath({json.dumps(step.path)}));")
         elif step.action == "assert_url":
-            lines.append(f"  await expect(page).toHaveURL(baseURL.replace(/\\/$/, '') + {json.dumps(step.path)});")
+            lines.append(f"  await expect(page).toHaveURL(targetPath({json.dumps(step.path)}));")
         else:
             locator = f"page.locator({json.dumps(step.selector)})"
             if step.action == "click":

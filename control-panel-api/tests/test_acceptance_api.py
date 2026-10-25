@@ -34,6 +34,46 @@ class AcceptanceApiTests(unittest.TestCase):
         response = self.client.post("/api/acceptance/plans", json={"name": "No assertion", "steps": [{"action": "click", "selector": "button"}]})
         self.assertEqual(response.status_code, 422)
 
+    def test_pass_requires_complete_step_evidence(self):
+        saved = store.save_plan(TestPlan.model_validate(PLAN))
+        run = store.create_run(saved["id"], "http://127.0.0.1:8120/fixed")
+        store.claim(run["id"])
+        store.finish(run["id"], "passed", [])
+        self.assertEqual(store.get_run(run["id"])["status"], "errored")
+
+    def test_interrupted_suite_progress_survives_restart(self):
+        suite = {"id": "suite-test", "total": 2, "done": 1, "passed": 1, "failed": 0, "errored": 0, "finished": False, "run_ids": ["completed-run"]}
+        store.save_suite(suite)
+        store.recover_interrupted()
+        saved = store.get_suite(suite["id"])
+        self.assertTrue(saved["finished"])
+        self.assertEqual(saved["done"], 1)
+        self.assertEqual(saved["run_ids"], ["completed-run"])
+        self.assertIn("interrupted", saved["reason"])
+
+    def test_invalid_target_addresses_are_validation_errors(self):
+        for address in ["http://localhost:invalid", "http://localhost:99999", "http://user:password@localhost:3000", "http://localhost/a\\b"]:
+            self.assertEqual(self.client.post("/api/acceptance/targets", json={"name": "App", "url": address}).status_code, 422)
+
+    def test_missing_grounding_flags_every_selector(self):
+        response_plan = {"plan": PLAN, "summary": "Drafted.", "unmapped": []}
+        with patch("app.acceptance_api.page_map", side_effect=__import__("fastapi").HTTPException(502, "Offline")), patch("app.acceptance_api.planner.draft", return_value=response_plan):
+            response = self.client.post("/api/acceptance/draft", json={"instruction": "Check that email is required", "target_id": "sample-fixed"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["unmapped"], [0, 1])
+        self.assertFalse(response.json()["grounded"])
+
+    def test_passing_a_different_contract_with_same_name_does_not_hide_failure(self):
+        from app.acceptance_insights import brief_facts
+        first = store.save_plan(TestPlan.model_validate(PLAN))
+        changed = {**PLAN, "steps": [PLAN["steps"][0], {**PLAN["steps"][1], "expected": "Something else"}]}
+        second = store.save_plan(TestPlan.model_validate(changed))
+        for saved, state in [(first, "failed"), (second, "passed")]:
+            run = store.create_run(saved["id"], "http://127.0.0.1:8120/fixed")
+            store.claim(run["id"])
+            store.finish(run["id"], state, [{"index": index, "action": step["action"], "status": state if index else "passed"} for index, step in enumerate(saved["body"]["steps"])])
+        self.assertEqual(len(brief_facts()["open_failures"]), 1)
+
     def test_saved_contract_is_exported_without_changing_expectations(self):
         saved = self.client.post("/api/acceptance/plans", json=PLAN).json()
         source = self.client.get(f"/api/acceptance/plans/{saved['id']}/export").json()["source"]
@@ -114,7 +154,8 @@ class AcceptanceApiTests(unittest.TestCase):
         broken = "http://127.0.0.1:8120/broken"
         failure = [{"index": 0, "action": "click", "status": "passed"},
                    {"index": 1, "action": "assert_text", "status": "failed", "expected": "Email is required", "actual": ["Order confirmed"]}]
-        for status, results in (("failed", failure), ("passed", [])):  # failed first, then fixed
+        passed = [{"index": 0, "action": "click", "status": "passed"}, {"index": 1, "action": "assert_text", "status": "passed"}]
+        for status, results in (("failed", failure), ("passed", passed)):  # failed first, then fixed
             run = store.create_run(saved["id"], broken)
             store.claim(run["id"])
             store.finish(run["id"], status, results)

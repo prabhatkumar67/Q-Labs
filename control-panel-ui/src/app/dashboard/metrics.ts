@@ -95,7 +95,7 @@ export function openFailures(runs: Run[], plans: SavedPlan[], targets: Target[])
     if (!finished(run) || run.status === "cancelled") continue;
     const plan = byId.get(run.plan_id);
     if (!plan) continue;
-    const key = `${plan.name}|${run.target}`;
+    const key = `${JSON.stringify(plan.body)}|${run.target}`;
     if (seen.has(key)) continue;
     seen.add(key);
     if (run.status !== "failed" && run.status !== "errored") continue;
@@ -104,7 +104,7 @@ export function openFailures(runs: Run[], plans: SavedPlan[], targets: Target[])
     // How long it has been broken: walk back through earlier runs of the same test on the same app.
     let since = time(run);
     for (const older of runs) {
-      if (time(older) >= since || byId.get(older.plan_id)?.name !== plan.name || older.target !== run.target) continue;
+      if (time(older) >= since || JSON.stringify(byId.get(older.plan_id)?.body) !== JSON.stringify(plan.body) || older.target !== run.target) continue;
       if (older.status === "passed") break;
       since = time(older);
     }

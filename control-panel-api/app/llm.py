@@ -43,4 +43,10 @@ def complete(system, user, max_tokens=3000, json_mode=True):
         raise LLMError(429, "The AI model is rate limited right now. Wait a few seconds and try again.")
     if response.status_code >= 400:
         raise LLMError(502, f"The AI model returned an error ({response.status_code}).")
-    return response.json()["choices"][0]["message"]["content"] or ""
+    try:
+        content = response.json()["choices"][0]["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Empty completion")
+        return content
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise LLMError(502, "The AI model returned an incomplete response. Your saved tests have not changed; try again.") from exc

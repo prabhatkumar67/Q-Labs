@@ -1,6 +1,7 @@
 import type { Target } from "./types";
 
 export type Command =
+  | { type: "clarify"; message: string }
   | { type: "run"; targetId?: string; watch?: boolean }
   | { type: "target"; targetId: string }
   | { type: "undo" }
@@ -14,12 +15,14 @@ export function matchTarget(phrase: string, targets: Target[]): string | undefin
   const said = words(phrase).replace(/\b(the|build|version|app|one)\b/g, " ").trim();
   if (!said) return undefined;
   let best: { id: string; score: number } | undefined;
+  let tied = false;
   for (const target of targets) {
     const name = words(target.name);
-    const score = said.split(" ").filter(word => word.length > 2 && name.includes(word)).length;
-    if (score && (!best || score > best.score)) best = { id: target.id, score };
+    const score = said === name ? 100 : said.split(/\s+/).filter(word => word.length > 2 && name.split(" ").includes(word)).length;
+    if (score && (!best || score > best.score)) { best = { id: target.id, score }; tied = false; }
+    else if (score && best?.score === score) tied = true;
   }
-  return best?.id;
+  return tied ? undefined : best?.id;
 }
 
 /**
@@ -39,12 +42,19 @@ export function parseCommand(text: string, targets: Target[]): Command | null {
     .trim();
 
   const run = said.match(/^(?:re ?run|run|test|try)(?: it| this| that| the test| again| it again)*(?: (?:on|against|with|in|using) (.+))?$/);
-  if (run) return { type: "run", targetId: run[1] ? matchTarget(run[1], targets) : undefined, watch };
+  if (run) {
+    const targetId = run[1] ? matchTarget(run[1], targets) : undefined;
+    if (run[1] && !targetId) return { type: "clarify", message: "I could not identify that app uniquely. Choose its target or say its full name before running." };
+    return { type: "run", targetId, watch };
+  }
 
   const target = said.match(/^(?:switch|change|use|go|point it)(?: (?:to|over to|the))* (.+)$/);
   if (target) {
     const targetId = matchTarget(target[1], targets);
     if (targetId) return { type: "target", targetId };
+    if (/^(?:switch|go|point it)\b|^change (?:to|target|app)\b|^use (?:the )?(?:fixed|broken|demo|app|build)\b/.test(said)) {
+      return { type: "clarify", message: "I could not identify that app uniquely. Choose it in Target, then try again." };
+    }
   }
   if (/^(undo|undo that|go back|revert|revert that)$/.test(said)) return { type: "undo" };
   if (/^(start over|new test|clear( the test| everything)?|reset)$/.test(said)) return { type: "reset" };

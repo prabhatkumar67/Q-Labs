@@ -123,7 +123,7 @@ export function VoiceComposer({ text, onText, onSubmit, working, hasSteps, mic, 
             <button
               type="button"
               className="qs-send"
-              disabled={working || text.trim().length < 6}
+              disabled={working || !text.trim()}
               onClick={onSubmit}
               aria-label={hasSteps ? "Apply change" : "Draft test"}
               title="Ctrl + Enter"

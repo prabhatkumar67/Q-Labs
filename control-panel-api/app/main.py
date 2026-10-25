@@ -56,9 +56,14 @@ used_ports: set[int] = set()
 
 def get_docker() -> docker.DockerClient:
     global docker_client
-    if docker_client is None:
-        docker_client = docker.from_env()
-    return docker_client
+    try:
+        if docker_client is None:
+            docker_client = docker.from_env(timeout=5)
+        docker_client.ping()
+        return docker_client
+    except docker.errors.DockerException as exc:
+        docker_client = None
+        raise HTTPException(status_code=503, detail="Docker is unavailable. Start Docker Engine to use container sandboxes. The test studio does not require Docker.") from exc
 
 
 def find_available_port() -> int:
@@ -894,7 +899,7 @@ async def save_walkthrough(container_id: str, body: SaveRequest = SaveRequest())
                 elif member.name == tar_prefix:
                     continue
                 if member.name:
-                    tar.extract(member, path=abs_path)
+                    tar.extract(member, path=abs_path, filter="data")
 
         # Get parent scenario info for naming and app_version_id
         parent_row = db.execute(

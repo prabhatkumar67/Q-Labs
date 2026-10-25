@@ -181,7 +181,7 @@ export default function DashboardPage() {
       <header className="qd-top">
         <div>
           <h1>Dashboard</h1>
-          <p className="qd-sub">How your acceptance tests are doing, written from real runs.</p>
+          <p className="qd-sub">How your acceptance tests are doing, from the latest 100 recorded runs.</p>
         </div>
         <div className="qd-top-actions">
           <div className="qd-segmented" role="radiogroup" aria-label="Time range">
@@ -248,7 +248,7 @@ export default function DashboardPage() {
           <span className="qd-delta">{failures.length ? "Tests whose latest run failed. Click to see them." : "Every test passed on its latest run."}</span>
         </button>
         <div className="qd-card qd-kpi">
-          <span className="qd-label">Median run time</span>
+          <span className="qd-label" title="Median sum of recorded step durations. Excludes queue and browser startup time.">Median execution time</span>
           <span className="qd-value">{formatMs(stats.medianMs)}</span>
           <Delta now={stats.medianMs} before={stats.previousMedianMs} unit="ms" goodWhenUp={false} />
         </div>

@@ -97,13 +97,13 @@ export default function TunnelsPage() {
               </td>
               <td className="py-3 px-4 text-xs text-muted-foreground">FastAPI Backend</td>
               <td className="py-3 px-4">
-                <Badge variant={health ? "success" : "error"}>
+                <Badge variant={health && health.status !== "error" ? "success" : "error"}>
                   <span className="size-1.5 rounded-full bg-current mr-0.5" />
-                  {health ? "connected" : "disconnected"}
+                  {health && health.status !== "error" ? "connected" : "disconnected"}
                 </Badge>
               </td>
               <td className="py-3 px-4">
-                <Badge variant="success">healthy</Badge>
+                <Badge variant={health?.status === "healthy" ? "success" : health?.status === "degraded" ? "warning" : "error"}>{health?.status || "unknown"}</Badge>
               </td>
             </tr>
           </tbody>

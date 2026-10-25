@@ -3,6 +3,8 @@
 import json
 import sys
 
+from app.target_urls import same_origin
+
 # Collected in the page: interactive controls, headings, live regions and leaf elements with ids.
 COLLECT = r"""() => {
   const out = [];
@@ -57,7 +59,7 @@ def inspect(url):
         try:
             context = browser.new_context(viewport={"width": 1280, "height": 800})
             context.route("**/*", lambda route: route.continue_() if (
-                route.request.url.startswith(origin + "/") or route.request.url == origin
+                same_origin(route.request.url, origin)
             ) else route.abort())
             page = context.new_page()
             page.goto(origin, wait_until="domcontentloaded", timeout=20000)

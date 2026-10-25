@@ -4,6 +4,8 @@
 
 Q Labs helps developers turn spoken acceptance criteria into repeatable browser tests. Describe a workflow, review the proposed steps and explicit expectations, then run it in Chromium. Inspect expected versus observed results and screenshots, refine the test through follow-up instructions, and rerun the saved test against a fix.
 
+For the checked local workflow and remaining deployment requirements, see [release readiness](RELEASE-READINESS.md). A focused two-minute walkthrough is in [the recording guide](DEMO-RECORDING.md).
+
 ## Table of contents
 
 - [Voice test studio](#voice-test-studio)
@@ -95,9 +97,9 @@ The demo store at port 8120 is a small coffee shop checkout with a broken and a 
 
 1. Pick **Demo store, broken build** and click the mic (or press M).
 2. Say: "Leave the email empty and press place order. It should say email is required."
-3. Say: "Run it." The check fails: expected `Email is required`, actual `Order confirmed`.
-4. Say: "Also apply the code save ten and check the total drops to twenty one dollars sixty."
-5. Say: "Run it on the fixed build." Both checks pass with the same saved test.
+3. Say: "Also apply the code save ten and check the total drops to twenty one dollars sixty." Review the complete test.
+4. Say: "Run it." The email check fails: expected `Email is required`, actual `Order confirmed`. Later steps are blocked.
+5. Say: "Run it on the fixed build." Both checks pass with the same saved test and unchanged expectations.
 6. Say: "Export." The Playwright file downloads.
 
 ### On a real app
@@ -188,6 +190,8 @@ $env:QLABS_UI_E2E='1'
 ```
 
 In `control-panel-ui`, run `npx tsc --noEmit`, `npm run lint` and `npm run build`.
+
+`npm run test` checks the frontend command parser and reporting logic. Unfinished studio drafts are retained in session storage for the current tab; saved tests and run evidence remain in the backend workspace.
 
 Verify real dictation and model-generated plans separately from automated checks. Page inspection and speech handling do not guarantee that every request produces the intended test.
 

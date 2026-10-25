@@ -23,6 +23,9 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
   const audio = useRef<AudioContext | null>(null);
   const frame = useRef(0);
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const opening = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stopping = useRef(false);
   const buffer = useRef("");
   const keyterms = useRef<string[]>([]);
   const mutedUntil = useRef(0);
@@ -41,6 +44,9 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
 
   const teardown = useCallback(() => {
     if (settle.current) clearTimeout(settle.current);
+    if (closing.current) clearTimeout(closing.current);
+    if (opening.current) clearTimeout(opening.current);
+    stopping.current = false;
     cancelAnimationFrame(frame.current);
     if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
     recorder.current = null;
@@ -57,8 +63,8 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
   }, []);
 
   const start = useCallback(async () => {
-    teardown();
     const id = ++session.current;
+    teardown();
     buffer.current = "";
     setHeard("");
     setConnecting(true);
@@ -67,7 +73,7 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
       if (id !== session.current) return media.getTracks().forEach(track => track.stop());
       stream.current = media;
       // Ask for the short lived key only after permission, so it cannot expire inside the browser prompt.
-      const response = await fetch(`${API_URL}/api/voice/token`);
+      const response = await fetch(`${API_URL}/api/voice/token`, { signal: AbortSignal.timeout(15000) });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || typeof body.key !== "string") throw new Error(body.detail || "The speech service is not available.");
       if (id !== session.current) return;
@@ -97,9 +103,16 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
       keyterms.current.forEach(term => params.append("keyterm", term));
       const ws = new WebSocket(`wss://api.deepgram.com/v1/listen?${params}`, ["token", body.key]);
       socket.current = ws;
+      opening.current = setTimeout(() => {
+        if (id !== session.current) return;
+        session.current++;
+        teardown();
+        onErrorRef.current("The microphone connection timed out. Try again or use Wispr Flow.");
+      }, 10000);
 
       ws.onopen = () => {
         if (id !== session.current) return ws.close();
+        if (opening.current) clearTimeout(opening.current);
         const rec = new MediaRecorder(media);
         recorder.current = rec;
         rec.ondataavailable = event => {
@@ -112,7 +125,19 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
 
       ws.onmessage = event => {
         if (id !== session.current) return;
-        const data = JSON.parse(event.data);
+        let data;
+        try { data = JSON.parse(event.data); } catch { return; }
+        if (!data || typeof data !== "object") return;
+        if (data.type === "Metadata" && stopping.current) {
+          flush();
+          session.current++;
+          teardown();
+          return;
+        }
+        if (data.type === "Error") {
+          onErrorRef.current("The speech service could not process this session. Reconnect or use Wispr Flow.");
+          flush(); session.current++; teardown(); return;
+        }
         // While Q Labs is speaking, the mic hears it too. Drop that audio instead of treating it as a request.
         if (Date.now() < mutedUntil.current) {
           buffer.current = "";
@@ -156,6 +181,8 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
   }, [flush, teardown]);
 
   const stop = useCallback(() => {
+    if (stopping.current) return;
+    stopping.current = true;
     const ws = socket.current;
     const rec = recorder.current;
     const id = session.current;
@@ -166,7 +193,7 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
       teardown();
     };
     // Send the last audio, ask Deepgram to finalize, then close; give up after a moment either way.
-    setTimeout(finish, 1800);
+    closing.current = setTimeout(finish, 2500);
     if (rec && rec.state !== "inactive") {
       rec.onstop = () => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "CloseStream" }));
       rec.stop();
@@ -179,7 +206,7 @@ export function useLiveMic(onRequest: (text: string) => void, onError: (message:
 
   /** Ignore what the mic hears for the next `ms` milliseconds. */
   const mute = useCallback((ms: number) => {
-    mutedUntil.current = Math.max(mutedUntil.current, Date.now() + ms);
+    mutedUntil.current = Date.now() + ms;
     if (settle.current) clearTimeout(settle.current);
     buffer.current = "";
     setHeard("");

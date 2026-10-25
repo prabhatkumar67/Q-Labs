@@ -41,7 +41,7 @@ Add these to `control-panel-api/.env` (the file is gitignored):
 | `GROQ_API_KEY` | Turning what you say into steps. Free tier works. `GROQ_MODEL` overrides the default `openai/gpt-oss-120b`. |
 | `DEEPGRAM_API_KEY`, `DEEPGRAM_PROJECT_ID` | The live mic. The API mints a ten second key per session, so the real key never reaches the browser. |
 
-`ANTHROPIC_API_KEY` works as a drafting fallback when no Groq key is set.
+The current drafting client uses Groq. An Anthropic key alone does not enable drafting.
 
 Without Deepgram keys the mic button is off, and Wispr Flow is the voice input: dictate into the box and press Ctrl + Enter. Without any model key you can still edit steps by hand, run and export.
 
@@ -57,7 +57,7 @@ Without Deepgram keys the mic button is off, and Wispr Flow is the voice input: 
    - "watch it run", "run it and show me" (opens a visible browser for that run)
    - "undo", "start over", "export"
 
-Speech recognition gets the page's own labels as key terms, so words like "Place order" or "SAVE10" are heard correctly.
+Speech recognition receives the page's labels as key terms to improve recognition of names such as "Place order" and "SAVE10". Check the transcript when exact wording matters.
 
 ## Watching and hearing a run
 
@@ -67,9 +67,11 @@ Speech recognition gets the page's own labels as key terms, so words like "Place
 
 ## Test your own app
 
-Click the plus button next to Target, give the app a name and an address such as `http://localhost:3001`. Only localhost addresses are accepted unless `QLABS_ALLOW_REMOTE_TARGETS=1` is set in `control-panel-api/.env`. During a run the browser only loads requests from that address, so third party scripts on the page are blocked.
+Click the plus button next to Target, give the app a name and an address such as `http://localhost:3001`. Only localhost addresses are accepted unless `QLABS_ALLOW_REMOTE_TARGETS=1` is set in `control-panel-api/.env`. Inspection and execution allow requests on the same origin, including assets outside the starting path. Third-party origins remain blocked. Navigation and URL-assertion paths are relative to the app origin; old demo plans using `/` retain the selected fixture's entry page.
 
-## Demo script (about two minutes)
+## Feature walkthrough
+
+For the timed two-minute recording, follow [DEMO-RECORDING.md](DEMO-RECORDING.md). The longer tour below covers additional features.
 
 Start everything with `./dev.ps1`, turn on **Show browser** and **Read results aloud**, and begin with an empty studio on **Demo store, broken build**.
 
@@ -77,12 +79,12 @@ Start everything with `./dev.ps1`, turn on **Show browser** and **Read results a
 2. Mic on: "Leave the email empty and press place order. It should say email is required."
 3. "Run it." Chromium opens and clicks through. The check fails and Q Labs says: expected `Email is required`, the page showed `Order confirmed`.
 4. "Also apply the code save ten and check the total drops to twenty one dollars sixty." The new steps flash.
-5. "Run it on the fixed build." Same saved test, both checks pass.
+5. Run the expanded test on the broken build first, then change only the target and say "Run it on the fixed build." The saved contract and expectations stay unchanged between those two runs.
 6. "Export." The Playwright file downloads and runs in any Playwright project with `BASE_URL` set.
 7. Real app: add SaySketch (`https://saysketch.vercel.app`), then say "Click start drawing and it should take me to the editor page", then "run it". It passes, with the browser ending on `/d/new`.
 8. Open **Dashboard**. Point at the open failures with expected and actual side by side, expand one to show its screenshot, and read the AI brief. Click a suggested test to open it in the studio, or press **Run all tests** on an app and watch the progress bar.
 
-On an empty install the dashboard offers **Load demo data**. It saves four demo tests and runs each on both builds, about 20 seconds in total, so the numbers on screen come from real runs.
+On an empty install the dashboard offers **Load demo data**. It saves four demo tests and runs each on both builds. Duration varies; the numbers on screen come from real runs.
 
 The broken build has two bugs on purpose: it confirms orders without an email, and it shows "SAVE10 applied" without lowering the total.
 

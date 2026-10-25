@@ -32,6 +32,9 @@ def database():
             CREATE TABLE IF NOT EXISTS acceptance_targets (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS acceptance_suites (
+                id TEXT PRIMARY KEY, body TEXT NOT NULL
+            );
         """)
         yield conn
         conn.commit()
@@ -116,6 +119,16 @@ def claim(run_id):
 
 def finish(run_id, status, results, reason=None):
     with database() as conn:
+        if status == "passed":
+            row = conn.execute("SELECT p.body FROM acceptance_runs r JOIN acceptance_plans p ON p.id=r.plan_id WHERE r.id=?", (run_id,)).fetchone()
+            steps = json.loads(row["body"])["steps"] if row else []
+            by_index = {result.get("index"): result for result in results}
+            verified = (bool(steps) and len(results) == len(steps) == len(by_index)
+                        and any(step["action"].startswith("assert_") for step in steps)
+                        and all(by_index.get(index, {}).get("status") == "passed"
+                                and by_index[index].get("action") == step["action"] for index, step in enumerate(steps)))
+            if not verified:
+                status, reason = "errored", "The worker did not provide completed evidence for every required step. This run is not verified."
         conn.execute("UPDATE acceptance_runs SET status=?,results=?,reason=?,completed_at=? WHERE id=? AND status IN ('queued','running')",
                      (status, json.dumps(results), reason, now(), run_id))
 
@@ -130,6 +143,23 @@ def recover_interrupted():
     with database() as conn:
         conn.execute("UPDATE acceptance_runs SET status='errored',completed_at=?,reason=? WHERE status IN ('queued','running')",
                      (now(), "The API restarted before execution was confirmed complete. Rerun the saved test."))
+        for row in conn.execute("SELECT id, body FROM acceptance_suites").fetchall():
+            suite = json.loads(row["body"])
+            if not suite["finished"]:
+                suite.update(finished=True, reason="Execution was interrupted by an API restart. Completed runs remain available; rerun the suite.")
+                conn.execute("UPDATE acceptance_suites SET body=? WHERE id=?", (json.dumps(suite), row["id"]))
+
+
+def save_suite(suite):
+    with database() as conn:
+        conn.execute("INSERT INTO acceptance_suites (id,body) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+                     (suite["id"], json.dumps(suite)))
+
+
+def get_suite(suite_id):
+    with database() as conn:
+        row = conn.execute("SELECT body FROM acceptance_suites WHERE id=?", (suite_id,)).fetchone()
+        return json.loads(row["body"]) if row else None
 
 
 def cancel(run_id):
